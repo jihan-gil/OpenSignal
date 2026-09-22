@@ -1,0 +1,4 @@
+body { font-family: monospace; background:#111; color:#eee; max-width:360px; margin:40px auto; padding:0 12px; }
+label { display:block; margin-top:10px; font-size:12px; opacity:.7; }
+input, select, button { width:100%; padding:6px; margin-top:2px; }
+button { margin-top:12px; cursor:pointer; }
