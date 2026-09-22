@@ -106,11 +106,12 @@ async function join() {
     return;
   }
 
-  room.onPeerStream(stream => {
+  room.onPeerStream = (stream, peerId) => {
     const audioEl = document.createElement('audio');
     audioEl.autoplay = true;
     audioEl.srcObject = stream;
     audioEl.dataset.peer = 'true';
+    audioEl.dataset.peerId = peerId;
     document.body.appendChild(audioEl);
     applySink(audioEl);
     updateUserCount();
@@ -119,13 +120,10 @@ async function join() {
     updateUserCount();
     room.addStream(localStream, { target: peerId });
   };
-  room.onPeerLeave = () => {
+  room.onPeerLeave = peerId => {
     updateUserCount();
-    // drop the matching audio el(s) whose stream is now inactive
-    document.querySelectorAll('audio[data-peer]').forEach(el => {
-      if (el.srcObject && !el.srcObject.active) el.remove();
-    });
-  });
+    document.querySelectorAll(`audio[data-peer][data-peer-id="${peerId}"]`).forEach(el => el.remove());
+  };
 
   $('status').textContent = 'Connected';
   $('usersLine').style.display = 'block';
