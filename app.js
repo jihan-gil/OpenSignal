@@ -8,7 +8,7 @@ window.addEventListener('unhandledrejection', event => {
 
 let joinRoom;
 try {
-  ({ joinRoom } = await import('https://cdn.jsdelivr.net/npm/trystero@0.20.1/dist/trystero-torrent.min.js'));
+  ({ joinRoom } = await import('https://esm.run/trystero'));
 } catch (err) {
   statusEl.textContent = `Failed to load voice networking: ${err.message}`;
 }
