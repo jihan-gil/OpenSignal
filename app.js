@@ -1,176 +1,108 @@
-const statusEl = document.getElementById('status');
-window.addEventListener('error', event => {
-  statusEl.textContent = `App error: ${event.message}`;
-});
-window.addEventListener('unhandledrejection', event => {
-  statusEl.textContent = `App error: ${event.reason?.message || event.reason}`;
-});
-
-let joinRoom;
-try {
-  ({ joinRoom } = await import('https://esm.run/trystero'));
-} catch (err) {
-  statusEl.textContent = `Failed to load voice networking: ${err.message}`;
-}
-
-// ---- global SDP patch: force stereo opus on every RTCPeerConnection, no matter who creates it ----
-if (!window.RTCPeerConnection) {
-  statusEl.textContent = 'WebRTC is unavailable in this browser. Use Chrome, Edge, or Firefox.';
-} else {
-  const origSetLocalDescription = RTCPeerConnection.prototype.setLocalDescription;
-  RTCPeerConnection.prototype.setLocalDescription = function (desc) {
-    if (desc && desc.sdp) desc.sdp = patchOpusSdp(desc.sdp);
-    return origSetLocalDescription.call(this, desc);
-  };
-}
-function patchOpusSdp(sdp) {
-  const lines = sdp.split('\r\n');
-  const rtpmap = lines.find(l => /^a=rtpmap:\d+ opus\/48000\/2/i.test(l));
-  if (!rtpmap) return sdp;
-  const pt = rtpmap.match(/^a=rtpmap:(\d+)/)[1];
-  let patched = false;
-  const out = lines.map(l => {
-    if (l.startsWith(`a=fmtp:${pt} `)) {
-      patched = true;
-      return l + ';stereo=1;sprop-stereo=1;minptime=10;maxaveragebitrate=256000';
-    }
-    return l;
-  });
-  if (!patched) {
-    const i = out.findIndex(l => l === rtpmap);
-    out.splice(i + 1, 0, `a=fmtp:${pt} stereo=1;sprop-stereo=1;minptime=10;maxaveragebitrate=256000`);
-  }
-  return out.join('\r\n');
-}
-
 const $ = id => document.getElementById(id);
-const APP_ID = 'te-voicechat-min';
-
-if (location.protocol === 'file:') {
-  $('status').textContent = 'Open this app through http://localhost:4173 (run node server.js)';
-}
-
-let room, localStream;
+let joinRoom, room = null, localStream = null;
+const APP_ID = 'opensignal-voicechat-v1';
+const status = message => { $('status').textContent = message; };
+const fail = (prefix, error) => status(`${prefix}: ${error?.message || error}`);
+const count = () => { $('userCount').textContent = String(1 + (room ? Object.keys(room.getPeers()).length : 0)); };
 
 async function listDevices() {
   const devices = await navigator.mediaDevices.enumerateDevices();
-  const mics = devices.filter(d => d.kind === 'audioinput');
-  const outs = devices.filter(d => d.kind === 'audiooutput');
-  $('inputSel').innerHTML = mics.map(d => `<option value="${d.deviceId}">${d.label || 'Microphone'}</option>`).join('');
-  if (outs.length) {
-    $('outputSel').innerHTML = outs.map(d => `<option value="${d.deviceId}">${d.label || 'Speaker'}</option>`).join('');
+  const inputs = devices.filter(d => d.kind === 'audioinput');
+  const outputs = devices.filter(d => d.kind === 'audiooutput');
+  $('inputSel').replaceChildren(...inputs.map((d, i) => new Option(d.label || `Microphone ${i + 1}`, d.deviceId)));
+  if (outputs.length && HTMLMediaElement.prototype.setSinkId) {
+    $('outputSel').disabled = false;
+    $('outputSel').replaceChildren(...outputs.map((d, i) => new Option(d.label || `Speaker ${i + 1}`, d.deviceId)));
   } else {
-    $('outputSel').innerHTML = '<option>Not supported</option>';
     $('outputSel').disabled = true;
+    $('outputSel').replaceChildren(new Option('Output selection unavailable', ''));
   }
 }
-if (!navigator.mediaDevices?.getUserMedia) {
-  $('status').textContent = 'Microphone access requires the local web server. Run node server.js.';
-} else navigator.mediaDevices.getUserMedia({ audio: true }).then(s => {
-  s.getTracks().forEach(t => t.stop());
-  listDevices();
-}).catch(err => {
-  $('status').textContent = 'Mic permission error: ' + err.message;
-});
-navigator.mediaDevices?.addEventListener('devicechange', listDevices);
 
-async function getStream(deviceId) {
+function getMic(deviceId) {
   return navigator.mediaDevices.getUserMedia({
-    audio: {
-      deviceId: deviceId ? { exact: deviceId } : undefined,
-      channelCount: { ideal: 2 },
-      sampleRate: { ideal: 48000 },
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false
-    }
+    audio: { deviceId: deviceId ? { exact: deviceId } : undefined, channelCount: { ideal: 2 }, sampleRate: { ideal: 48000 }, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    video: false
   });
 }
 
-function updateUserCount() {
-  const count = 1 + (room ? Object.keys(room.getPeers()).length : 0);
-  $('userCount').textContent = count;
+async function setOutput(audio) {
+  if (audio.setSinkId && $('outputSel').value) {
+    try { await audio.setSinkId($('outputSel').value); } catch (e) { console.warn(e); }
+  }
 }
 
 async function join() {
-  if (!joinRoom) { $('status').textContent = 'Trystero not loaded — check connection'; return; }
   const code = $('room').value.trim().toUpperCase();
-  if (!/^[A-Z0-9]{4}$/.test(code)) { $('status').textContent = 'Room must be 4 alphanumeric chars'; return; }
-
+  if (!/^[A-Z0-9]{4}$/.test(code)) return status('Room must be exactly 4 letters or numbers');
+  if (!joinRoom) return status('Voice networking failed to load');
   try {
-    localStream = await getStream($('inputSel').value);
+    localStream = await getMic($('inputSel').value);
     room = joinRoom({ appId: APP_ID }, code);
+    room.onPeerStream = async (stream, peerId) => {
+      let audio = document.querySelector(`audio[data-peer-id="${peerId}"]`);
+      if (!audio) { audio = document.createElement('audio'); audio.autoplay = true; audio.dataset.peerId = peerId; document.body.append(audio); }
+      audio.srcObject = stream;
+      await setOutput(audio);
+      count();
+    };
+    room.onPeerJoin = peerId => { room.addStream(localStream, { target: peerId }); count(); };
+    room.onPeerLeave = peerId => { document.querySelector(`audio[data-peer-id="${peerId}"]`)?.remove(); count(); };
     room.addStream(localStream);
-  } catch (err) {
-    $('status').textContent = 'Join failed: ' + err.message;
-    return;
-  }
-
-  room.onPeerStream = (stream, peerId) => {
-    const audioEl = document.createElement('audio');
-    audioEl.autoplay = true;
-    audioEl.srcObject = stream;
-    audioEl.dataset.peer = 'true';
-    audioEl.dataset.peerId = peerId;
-    document.body.appendChild(audioEl);
-    applySink(audioEl);
-    updateUserCount();
-  });
-  room.onPeerJoin = peerId => {
-    updateUserCount();
-    room.addStream(localStream, { target: peerId });
-  };
-  room.onPeerLeave = peerId => {
-    updateUserCount();
-    document.querySelectorAll(`audio[data-peer][data-peer-id="${peerId}"]`).forEach(el => el.remove());
-  };
-
-  $('status').textContent = 'Connected';
-  $('usersLine').style.display = 'block';
-  $('joinBtn').style.display = 'none';
-  $('leaveBtn').style.display = 'block';
-  updateUserCount();
+    $('room').disabled = true;
+    $('joinBtn').hidden = true;
+    $('leaveBtn').hidden = false;
+    $('usersLine').hidden = false;
+    status('Connected');
+    count();
+  } catch (e) { localStream?.getTracks().forEach(t => t.stop()); room = localStream = null; fail('Join failed', e); }
 }
 
 function leave() {
-  if (room) room.leave();
-  if (localStream) localStream.getTracks().forEach(t => t.stop());
-  document.querySelectorAll('audio[data-peer]').forEach(el => el.remove());
-  room = null;
-  $('status').textContent = 'Disconnected';
-  $('usersLine').style.display = 'none';
-  $('joinBtn').style.display = 'block';
-  $('leaveBtn').style.display = 'none';
+  room?.leave();
+  localStream?.getTracks().forEach(t => t.stop());
+  document.querySelectorAll('audio[data-peer-id]').forEach(a => a.remove());
+  room = localStream = null;
+  $('room').disabled = false;
+  $('joinBtn').hidden = false;
+  $('leaveBtn').hidden = true;
+  $('usersLine').hidden = true;
+  status('Disconnected');
 }
 
-async function applySink(el) {
-  const id = $('outputSel').value;
-  if (el.setSinkId && id) {
-    try { await el.setSinkId(id); } catch (e) { console.warn('setSinkId failed', e); }
-  }
-}
-
-async function switchInput() {
+async function changeInput() {
   if (!room) return;
   try {
-    const newStream = await getStream($('inputSel').value);
-    const newTrack = newStream.getAudioTracks()[0];
-    const peers = room.getPeers(); // { peerId: RTCPeerConnection }
-    await Promise.all(Object.values(peers).map(async pc => {
-      const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
-      if (sender) await sender.replaceTrack(newTrack);
+    const replacement = await getMic($('inputSel').value);
+    const track = replacement.getAudioTracks()[0];
+    await Promise.all(Object.values(room.getPeers()).map(async pc => {
+      const sender = pc.getSenders().find(s => s.track?.kind === 'audio');
+      if (sender) await sender.replaceTrack(track);
     }));
     localStream.getTracks().forEach(t => t.stop());
-    localStream = newStream;
-    $('status').textContent = 'Connected';
-  } catch (err) {
-    $('status').textContent = `Input switch failed: ${err.message}`;
-  }
+    localStream = replacement;
+    room.addStream(localStream);
+  } catch (e) { fail('Input change failed', e); }
 }
 
-$('joinBtn').onclick = join;
-$('leaveBtn').onclick = leave;
-$('inputSel').addEventListener('change', switchInput);
-$('outputSel').addEventListener('change', () => {
-  document.querySelectorAll('audio[data-peer]').forEach(applySink);
-});
+async function start() {
+  if (location.protocol === 'file:') return status('Use GitHub Pages or a web server; file:// cannot run this app.');
+  if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) return status('This browser does not support WebRTC microphone access.');
+  try {
+    const permission = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    permission.getTracks().forEach(t => t.stop());
+    await listDevices();
+    status('Ready');
+  } catch (e) { fail('Microphone permission failed', e); }
+  try { ({ joinRoom } = await import('https://esm.run/trystero')); }
+  catch (e) { fail('Voice networking failed to load', e); }
+}
+
+$('joinBtn').addEventListener('click', join);
+$('leaveBtn').addEventListener('click', leave);
+$('inputSel').addEventListener('change', changeInput);
+$('outputSel').addEventListener('change', () => document.querySelectorAll('audio[data-peer-id]').forEach(setOutput));
+navigator.mediaDevices?.addEventListener('devicechange', () => listDevices().catch(e => fail('Device listing failed', e)));
+window.addEventListener('error', e => fail('App error', e.error || e.message));
+window.addEventListener('unhandledrejection', e => fail('App error', e.reason));
+start();
