@@ -1,16 +1,28 @@
+const statusEl = document.getElementById('status');
+window.addEventListener('error', event => {
+  statusEl.textContent = `App error: ${event.message}`;
+});
+window.addEventListener('unhandledrejection', event => {
+  statusEl.textContent = `App error: ${event.reason?.message || event.reason}`;
+});
+
 let joinRoom;
 try {
   ({ joinRoom } = await import('https://cdn.jsdelivr.net/npm/trystero@0.20.1/dist/trystero-torrent.min.js'));
 } catch (err) {
-  document.getElementById('status').textContent = `Failed to load voice networking: ${err.message}`;
+  statusEl.textContent = `Failed to load voice networking: ${err.message}`;
 }
 
 // ---- global SDP patch: force stereo opus on every RTCPeerConnection, no matter who creates it ----
-const origSetLocalDescription = RTCPeerConnection.prototype.setLocalDescription;
-RTCPeerConnection.prototype.setLocalDescription = function (desc) {
-  if (desc && desc.sdp) desc.sdp = patchOpusSdp(desc.sdp);
-  return origSetLocalDescription.call(this, desc);
-};
+if (!window.RTCPeerConnection) {
+  statusEl.textContent = 'WebRTC is unavailable in this browser. Use Chrome, Edge, or Firefox.';
+} else {
+  const origSetLocalDescription = RTCPeerConnection.prototype.setLocalDescription;
+  RTCPeerConnection.prototype.setLocalDescription = function (desc) {
+    if (desc && desc.sdp) desc.sdp = patchOpusSdp(desc.sdp);
+    return origSetLocalDescription.call(this, desc);
+  };
+}
 function patchOpusSdp(sdp) {
   const lines = sdp.split('\r\n');
   const rtpmap = lines.find(l => /^a=rtpmap:\d+ opus\/48000\/2/i.test(l));
