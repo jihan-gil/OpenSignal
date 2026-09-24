@@ -2,3 +2,9 @@ body { font-family: monospace; background:#111; color:#eee; max-width:360px; mar
 label { display:block; margin-top:10px; font-size:12px; opacity:.7; }
 input, select, button { width:100%; padding:6px; margin-top:2px; }
 button { margin-top:12px; cursor:pointer; }
+#selfControls { display:flex; gap:6px; }
+#selfControls button { flex:1; }
+#participants { margin-top:6px; }
+.participant { display:flex; align-items:center; gap:8px; margin:5px 0; }
+.participant-name { flex:1; overflow:hidden; text-overflow:ellipsis; }
+.participant-volume { width:90px; }

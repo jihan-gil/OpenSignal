@@ -1,17 +1,36 @@
 const $ = id => document.getElementById(id);
 let joinRoom, room = null, localStream = null, sendName = null;
 const peerNames = new Map();
+let muted = false;
+let deafened = false;
 const APP_ID = 'opensignal-voicechat-v1';
 const status = message => { $('status').textContent = message; };
 const fail = (prefix, error) => status(`${prefix}: ${error?.message || error}`);
 function renderParticipants() {
-  const names = [$('name').value.trim() || 'You', ...peerNames.values()];
-  $('userCount').textContent = String(names.length);
-  $('participants').replaceChildren(...names.map(name => {
-    const item = document.createElement('li');
-    item.textContent = name;
-    return item;
-  }));
+  const self = document.createElement('div');
+  self.className = 'participant';
+  const selfLabel = document.createElement('span');
+  selfLabel.className = 'participant-name';
+  selfLabel.textContent = `${$('name').value.trim() || 'You'} (you)`;
+  self.append(selfLabel);
+  $('participants').replaceChildren(self);
+  for (const [peerId, name] of peerNames) {
+    const row = document.createElement('div');
+    row.className = 'participant';
+    const label = document.createElement('span');
+    label.className = 'participant-name';
+    label.textContent = name;
+    const volume = document.createElement('input');
+    volume.className = 'participant-volume';
+    volume.type = 'range'; volume.min = '0'; volume.max = '1'; volume.step = '0.01'; volume.value = '1';
+    volume.addEventListener('input', () => {
+      const audio = document.querySelector(`audio[data-peer-id="${peerId}"]`);
+      if (audio) audio.volume = Number(volume.value);
+    });
+    row.append(label, volume);
+    $('participants').append(row);
+  }
+  $('userCount').textContent = String(1 + peerNames.size);
 }
 
 async function listDevices() {
@@ -62,6 +81,8 @@ async function join() {
       let audio = document.querySelector(`audio[data-peer-id="${peerId}"]`);
       if (!audio) { audio = document.createElement('audio'); audio.autoplay = true; audio.dataset.peerId = peerId; document.body.append(audio); }
       audio.srcObject = stream;
+      audio.volume = 1;
+      audio.muted = deafened;
       await setOutput(audio);
       renderParticipants();
     };
@@ -81,6 +102,7 @@ async function join() {
     $('joinBtn').hidden = true;
     $('leaveBtn').hidden = false;
     $('usersLine').hidden = false;
+    $('selfControls').hidden = false;
     status('Connected');
     renderParticipants();
   } catch (e) { localStream?.getTracks().forEach(t => t.stop()); room = localStream = null; fail('Join failed', e); }
@@ -97,7 +119,23 @@ function leave() {
   $('leaveBtn').hidden = true;
   $('usersLine').hidden = true;
   $('participants').replaceChildren();
+  $('selfControls').hidden = true;
+  muted = false; deafened = false;
+  $('muteBtn').textContent = 'MUTE';
+  $('deafenBtn').textContent = 'DEAFEN';
   status('Disconnected');
+}
+
+function toggleMute() {
+  muted = !muted;
+  localStream?.getAudioTracks().forEach(track => { track.enabled = !muted; });
+  $('muteBtn').textContent = muted ? 'UNMUTE' : 'MUTE';
+}
+
+function toggleDeafen() {
+  deafened = !deafened;
+  document.querySelectorAll('audio[data-peer-id]').forEach(audio => { audio.muted = deafened; });
+  $('deafenBtn').textContent = deafened ? 'UNDEAFEN' : 'DEAFEN';
 }
 
 async function changeInput() {
@@ -132,6 +170,8 @@ $('joinBtn').addEventListener('click', join);
 $('leaveBtn').addEventListener('click', leave);
 $('inputSel').addEventListener('change', changeInput);
 $('outputSel').addEventListener('change', () => document.querySelectorAll('audio[data-peer-id]').forEach(setOutput));
+$('muteBtn').addEventListener('click', toggleMute);
+$('deafenBtn').addEventListener('click', toggleDeafen);
 navigator.mediaDevices?.addEventListener('devicechange', () => listDevices().catch(e => fail('Device listing failed', e)));
 window.addEventListener('error', e => fail('App error', e.error || e.message));
 window.addEventListener('unhandledrejection', e => fail('App error', e.reason));

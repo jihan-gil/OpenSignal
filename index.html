@@ -23,10 +23,14 @@
 
   <button id="joinBtn">JOIN</button>
   <button id="leaveBtn" style="display:none">LEAVE</button>
+  <div id="selfControls" hidden>
+    <button id="muteBtn" type="button">MUTE</button>
+    <button id="deafenBtn" type="button">DEAFEN</button>
+  </div>
 
   <div id="usersLine" hidden>
     <p>Users: <span id="userCount">1</span></p>
-    <ul id="participants"></ul>
+    <div id="participants"></div>
   </div>
   <p>Status: <span id="status">Disconnected</span></p>
   <script type="module" src="app.js"></script>
