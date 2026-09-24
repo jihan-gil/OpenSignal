@@ -6,6 +6,29 @@ let deafened = false;
 const APP_ID = 'opensignal-voicechat-v1';
 const status = message => { $('status').textContent = message; };
 const fail = (prefix, error) => status(`${prefix}: ${error?.message || error}`);
+
+// Request stereo Opus whenever the browser exposes a stereo Opus codec.
+// The microphone itself must also provide two channels for true stereo.
+if (window.RTCPeerConnection) {
+  const originalSetLocalDescription = RTCPeerConnection.prototype.setLocalDescription;
+  RTCPeerConnection.prototype.setLocalDescription = function (description) {
+    if (description?.sdp) description.sdp = forceStereoOpus(description.sdp);
+    return originalSetLocalDescription.call(this, description);
+  };
+}
+
+function forceStereoOpus(sdp) {
+  const lines = sdp.split('\r\n');
+  const opus = lines.find(line => /^a=rtpmap:\d+ opus\/48000\/2/i.test(line));
+  if (!opus) return sdp;
+  const payload = opus.match(/^a=rtpmap:(\d+)/)[1];
+  const fmtp = `a=fmtp:${payload}`;
+  const index = lines.findIndex(line => line.startsWith(fmtp));
+  const settings = 'stereo=1;sprop-stereo=1;minptime=10;maxaveragebitrate=256000';
+  if (index >= 0) lines[index] = `${lines[index]};${settings}`;
+  else lines.splice(lines.indexOf(opus) + 1, 0, `${fmtp} ${settings}`);
+  return lines.join('\r\n');
+}
 function renderParticipants() {
   const self = document.createElement('div');
   self.className = 'participant';
@@ -103,7 +126,8 @@ async function join() {
     $('leaveBtn').hidden = false;
     $('usersLine').hidden = false;
     $('selfControls').hidden = false;
-    status('Connected');
+    const channels = localStream.getAudioTracks()[0].getSettings().channelCount;
+    status(channels === 1 ? 'Connected (microphone is mono)' : 'Connected');
     renderParticipants();
   } catch (e) { localStream?.getTracks().forEach(t => t.stop()); room = localStream = null; fail('Join failed', e); }
 }
