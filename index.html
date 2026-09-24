@@ -9,6 +9,9 @@
 <body>
   <h1>OpenSignal</h1>
 
+  <label>Name:</label>
+  <input id="name" maxlength="24" placeholder="Your name" autocomplete="name" />
+
   <label>Room:</label>
   <input id="room" maxlength="4" placeholder="A7K2" />
 
@@ -21,7 +24,10 @@
   <button id="joinBtn">JOIN</button>
   <button id="leaveBtn" style="display:none">LEAVE</button>
 
-  <p id="usersLine" style="display:none">Users: <span id="userCount">1</span></p>
+  <div id="usersLine" hidden>
+    <p>Users: <span id="userCount">1</span></p>
+    <ul id="participants"></ul>
+  </div>
   <p>Status: <span id="status">Disconnected</span></p>
   <script type="module" src="app.js"></script>
 
