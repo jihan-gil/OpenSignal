@@ -3,6 +3,8 @@ let joinRoom, room = null, localStream = null, sendName = null;
 const peerNames = new Map();
 let muted = false;
 let deafened = false;
+const meters = new Map();
+let meterFrame = null;
 const APP_ID = 'opensignal-voicechat-v1';
 const status = message => { $('status').textContent = message; };
 const fail = (prefix, error) => status(`${prefix}: ${error?.message || error}`);
@@ -35,7 +37,7 @@ function renderParticipants() {
   const selfLabel = document.createElement('span');
   selfLabel.className = 'participant-name';
   selfLabel.textContent = `${$('name').value.trim() || 'You'} (you)`;
-  self.append(selfLabel);
+  self.append(selfLabel, createMeters('self'));
   $('participants').replaceChildren(self);
   for (const [peerId, name] of peerNames) {
     const row = document.createElement('div');
@@ -50,10 +52,59 @@ function renderParticipants() {
       const audio = document.querySelector(`audio[data-peer-id="${peerId}"]`);
       if (audio) audio.volume = Number(volume.value);
     });
-    row.append(label, volume);
+    row.append(label, createMeters(peerId), volume);
     $('participants').append(row);
   }
   $('userCount').textContent = String(1 + peerNames.size);
+}
+
+function createMeters(id) {
+  const wrapper = document.createElement('span');
+  wrapper.className = 'participant-meters';
+  wrapper.title = 'Left / right channel level';
+  wrapper.innerHTML = '<span class="channel-meter"><i></i></span><span class="channel-meter"><i></i></span>';
+  wrapper.dataset.meterId = id;
+  return wrapper;
+}
+
+function attachMeter(id, stream) {
+  meters.get(id)?.source.disconnect();
+  const context = new AudioContext();
+  const source = context.createMediaStreamSource(stream);
+  const splitter = context.createChannelSplitter(2);
+  const left = context.createAnalyser();
+  const right = context.createAnalyser();
+  left.fftSize = right.fftSize = 256;
+  source.connect(splitter);
+  splitter.connect(left, 0);
+  splitter.connect(right, 1);
+  meters.set(id, { context, source, left, right, leftData: new Uint8Array(left.fftSize), rightData: new Uint8Array(right.fftSize) });
+  if (!meterFrame) updateMeters();
+}
+
+function level(analyser, data) {
+  analyser.getByteTimeDomainData(data);
+  let total = 0;
+  for (const sample of data) { const value = (sample - 128) / 128; total += value * value; }
+  return Math.min(1, Math.sqrt(total / data.length) * 4);
+}
+
+function updateMeters() {
+  meterFrame = requestAnimationFrame(updateMeters);
+  for (const [id, meter] of meters) {
+    const element = document.querySelector(`[data-meter-id="${id}"]`);
+    if (!element) continue;
+    const bars = element.querySelectorAll('i');
+    bars[0].style.width = `${level(meter.left, meter.leftData) * 100}%`;
+    bars[1].style.width = `${level(meter.right, meter.rightData) * 100}%`;
+  }
+}
+
+function clearMeters() {
+  for (const meter of meters.values()) { meter.source.disconnect(); meter.context.close(); }
+  meters.clear();
+  if (meterFrame) cancelAnimationFrame(meterFrame);
+  meterFrame = null;
 }
 
 async function listDevices() {
@@ -72,7 +123,7 @@ async function listDevices() {
 
 function getMic(deviceId) {
   return navigator.mediaDevices.getUserMedia({
-    audio: { deviceId: deviceId ? { exact: deviceId } : undefined, channelCount: { ideal: 2 }, sampleRate: { ideal: 48000 }, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    audio: { deviceId: deviceId ? { exact: deviceId } : undefined, channelCount: { exact: 2 }, sampleRate: { ideal: 48000 }, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     video: false
   });
 }
@@ -91,7 +142,11 @@ async function join() {
   if (!joinRoom) return status('Voice networking failed to load');
   try {
     localStream = await getMic($('inputSel').value);
+    if (localStream.getAudioTracks()[0].getSettings().channelCount !== 2) {
+      throw new Error('The selected input did not provide true stereo audio');
+    }
     room = joinRoom({ appId: APP_ID }, code);
+    attachMeter('self', localStream);
     const names = room.makeAction('participant-name');
     sendName = (value, options) => names.send(value, options);
     names.onMessage = (value, peerInfo) => {
@@ -106,6 +161,7 @@ async function join() {
       audio.srcObject = stream;
       audio.volume = 1;
       audio.muted = deafened;
+      attachMeter(peerId, stream);
       await setOutput(audio);
       renderParticipants();
     };
@@ -117,6 +173,8 @@ async function join() {
     room.onPeerLeave = peerId => {
       peerNames.delete(peerId);
       document.querySelector(`audio[data-peer-id="${peerId}"]`)?.remove();
+      meters.get(peerId)?.context.close();
+      meters.delete(peerId);
       renderParticipants();
     };
     room.addStream(localStream);
@@ -126,8 +184,7 @@ async function join() {
     $('leaveBtn').hidden = false;
     $('usersLine').hidden = false;
     $('selfControls').hidden = false;
-    const channels = localStream.getAudioTracks()[0].getSettings().channelCount;
-    status(channels === 1 ? 'Connected (microphone is mono)' : 'Connected');
+    status('Connected · stereo');
     renderParticipants();
   } catch (e) { localStream?.getTracks().forEach(t => t.stop()); room = localStream = null; fail('Join failed', e); }
 }
@@ -136,6 +193,7 @@ function leave() {
   room?.leave();
   localStream?.getTracks().forEach(t => t.stop());
   document.querySelectorAll('audio[data-peer-id]').forEach(a => a.remove());
+  clearMeters();
   room = localStream = sendName = null;
   peerNames.clear();
   $('room').disabled = false;
@@ -173,6 +231,7 @@ async function changeInput() {
     }));
     localStream.getTracks().forEach(t => t.stop());
     localStream = replacement;
+    attachMeter('self', localStream);
     room.addStream(localStream);
   } catch (e) { fail('Input change failed', e); }
 }
