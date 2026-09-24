@@ -62,15 +62,16 @@ function createMeters(id) {
   const wrapper = document.createElement('span');
   wrapper.className = 'participant-meters';
   wrapper.title = 'Left / right channel level';
-  wrapper.innerHTML = '<span class="channel-meter"><i></i></span><span class="channel-meter"><i></i></span>';
+  wrapper.innerHTML = '<span class="meter-column"><b>L</b><span class="channel-meter"><i></i></span></span><span class="meter-column"><b>R</b><span class="channel-meter"><i></i></span></span>';
   wrapper.dataset.meterId = id;
   return wrapper;
 }
 
 function attachMeter(id, stream) {
-  meters.get(id)?.source.disconnect();
-  const context = new AudioContext();
-  const source = context.createMediaStreamSource(stream);
+  try {
+    meters.get(id)?.source.disconnect();
+    const context = new AudioContext();
+    const source = context.createMediaStreamSource(stream);
   const splitter = context.createChannelSplitter(2);
   const left = context.createAnalyser();
   const right = context.createAnalyser();
@@ -78,8 +79,12 @@ function attachMeter(id, stream) {
   source.connect(splitter);
   splitter.connect(left, 0);
   splitter.connect(right, 1);
-  meters.set(id, { context, source, left, right, leftData: new Uint8Array(left.fftSize), rightData: new Uint8Array(right.fftSize) });
-  if (!meterFrame) updateMeters();
+    meters.set(id, { context, source, left, right, leftData: new Uint8Array(left.fftSize), rightData: new Uint8Array(right.fftSize) });
+    if (context.state === 'suspended') context.resume();
+    if (!meterFrame) updateMeters();
+  } catch (error) {
+    console.warn('Audio meters unavailable', error);
+  }
 }
 
 function level(analyser, data) {

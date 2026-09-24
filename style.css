@@ -8,6 +8,8 @@ button { margin-top:12px; cursor:pointer; }
 .participant { display:flex; align-items:center; gap:8px; margin:5px 0; }
 .participant-name { flex:1; overflow:hidden; text-overflow:ellipsis; }
 .participant-volume { width:90px; }
-.participant-meters { display:flex; gap:3px; width:42px; }
-.channel-meter { width:19px; height:8px; background:#333; border:1px solid #666; }
+.participant-meters { display:flex; gap:3px; width:38px; flex:0 0 38px; }
+.meter-column { display:flex; flex-direction:column; align-items:center; gap:1px; }
+.meter-column b { font-size:8px; color:#aaa; font-weight:normal; }
+.channel-meter { display:block; width:16px; height:8px; background:#333; border:1px solid #888; }
 .channel-meter i { display:block; width:0; height:100%; background:#55d66b; }
