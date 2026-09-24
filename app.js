@@ -50,14 +50,14 @@ async function join() {
   try {
     localStream = await getMic($('inputSel').value);
     room = joinRoom({ appId: APP_ID }, code);
-    const [send, receive] = room.makeAction('participant-name');
-    sendName = send;
-    receive((value, peerIdOrInfo) => {
-      const peerId = typeof peerIdOrInfo === 'string' ? peerIdOrInfo : peerIdOrInfo?.peerId;
+    const names = room.makeAction('participant-name');
+    sendName = (value, options) => names.send(value, options);
+    names.onMessage = (value, peerInfo) => {
+      const peerId = peerInfo?.peerId;
       if (!peerId) return;
       peerNames.set(peerId, String(value).slice(0, 24));
       renderParticipants();
-    });
+    };
     room.onPeerStream = async (stream, peerId) => {
       let audio = document.querySelector(`audio[data-peer-id="${peerId}"]`);
       if (!audio) { audio = document.createElement('audio'); audio.autoplay = true; audio.dataset.peerId = peerId; document.body.append(audio); }
