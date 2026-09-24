@@ -14,8 +14,13 @@ const fail = (prefix, error) => status(`${prefix}: ${error?.message || error}`);
 if (window.RTCPeerConnection) {
   const originalSetLocalDescription = RTCPeerConnection.prototype.setLocalDescription;
   RTCPeerConnection.prototype.setLocalDescription = function (description) {
-    if (description?.sdp) description.sdp = forceStereoOpus(description.sdp);
-    return originalSetLocalDescription.call(this, description);
+    if (!description?.sdp) return originalSetLocalDescription.call(this, description);
+    const patched = forceStereoOpus(description.sdp);
+    if (patched === description.sdp) return originalSetLocalDescription.call(this, description);
+    return originalSetLocalDescription.call(this, new RTCSessionDescription({
+      type: description.type,
+      sdp: patched
+    }));
   };
 }
 
@@ -27,7 +32,13 @@ function forceStereoOpus(sdp) {
   const fmtp = `a=fmtp:${payload}`;
   const index = lines.findIndex(line => line.startsWith(fmtp));
   const settings = 'stereo=1;sprop-stereo=1;minptime=10;maxaveragebitrate=256000';
-  if (index >= 0) lines[index] = `${lines[index]};${settings}`;
+  if (index >= 0) {
+    const prefix = lines[index].slice(0, lines[index].indexOf(' ') + 1);
+    const params = lines[index].slice(prefix.length)
+      .split(';')
+      .filter(param => !/^\s*(stereo|sprop-stereo|minptime|maxaveragebitrate)\s*=/i.test(param));
+    lines[index] = `${prefix}${params.concat(settings.split(';')).join(';')}`;
+  }
   else lines.splice(lines.indexOf(opus) + 1, 0, `${fmtp} ${settings}`);
   return lines.join('\r\n');
 }
@@ -126,11 +137,14 @@ async function listDevices() {
   }
 }
 
-function getMic(deviceId) {
-  return navigator.mediaDevices.getUserMedia({
-    audio: { deviceId: deviceId ? { exact: deviceId } : undefined, channelCount: { exact: 2 }, sampleRate: { ideal: 48000 }, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-    video: false
-  });
+async function getMic(deviceId) {
+  const base = { deviceId: deviceId ? { exact: deviceId } : undefined, sampleRate: { ideal: 48000 }, echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: { ...base, channelCount: { exact: 2 } }, video: false });
+  } catch (error) {
+    if (error.name !== 'OverconstrainedError') throw error;
+    return navigator.mediaDevices.getUserMedia({ audio: { ...base, channelCount: { ideal: 2 } }, video: false });
+  }
 }
 
 async function setOutput(audio) {
@@ -147,9 +161,6 @@ async function join() {
   if (!joinRoom) return status('Voice networking failed to load');
   try {
     localStream = await getMic($('inputSel').value);
-    if (localStream.getAudioTracks()[0].getSettings().channelCount !== 2) {
-      throw new Error('The selected input did not provide true stereo audio');
-    }
     room = joinRoom({ appId: APP_ID }, code);
     attachMeter('self', localStream);
     const names = room.makeAction('participant-name');
@@ -189,7 +200,8 @@ async function join() {
     $('leaveBtn').hidden = false;
     $('usersLine').hidden = false;
     $('selfControls').hidden = false;
-    status('Connected · stereo');
+    const channels = localStream.getAudioTracks()[0].getSettings().channelCount;
+    status(channels === 2 ? 'Connected · stereo' : 'Connected · mono input');
     renderParticipants();
   } catch (e) { localStream?.getTracks().forEach(t => t.stop()); room = localStream = null; fail('Join failed', e); }
 }
